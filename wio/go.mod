@@ -1,6 +1,6 @@
 module github.com/adagit94/rio/wio
 
-go 1.25.5
+go 1.26.4
 
 require github.com/fasthttp/websocket v1.5.12
 
