@@ -13,8 +13,3 @@ require (
 	golang.org/x/net v0.57.0 // indirect
 )
 
-replace github.com/adagit94/err => ../../err
-
-replace github.com/adagit94/gotils => ../../gotils
-
-replace github.com/adagit94/t => ../../t
