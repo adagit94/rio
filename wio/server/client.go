@@ -2,8 +2,8 @@ package server
 
 import (
 	"fmt"
-	ws "github.com/fasthttp/websocket"
 	"time"
+	ws "github.com/fasthttp/websocket"
 )
 
 type ID interface {
@@ -20,6 +20,7 @@ type Client[I ID] struct {
 	ID              I
 	Hub             *Hub[I]
 	Conn            *ws.Conn
+	Subscribed      chan <- bool
 	MessagesToWrite chan *MessageIntern[I]
 }
 
@@ -30,10 +31,10 @@ func (c *Client[I]) Run() {
 
 func (c *Client[I]) readMessages() {
 	defer func() {
-		c.Hub.UnsubscribeCh <- c.ID
+		c.Hub.CloseClientCh <- c
 	}()
 
-	c.Conn.SetReadLimit(c.Hub.Options.MaxReadBytes)
+	c.Conn.SetReadLimit(c.Hub.ClientOptions.MaxReadBytes)
 
 	for {
 		msgType, msg, err := c.Conn.ReadMessage()
@@ -48,20 +49,20 @@ func (c *Client[I]) readMessages() {
 }
 
 func (c *Client[I]) writeMessages() {
-	pingTicker := time.NewTicker(c.Hub.Options.PingInterval)
-	pongTimer := time.NewTimer(c.Hub.Options.PongWait)
+	pingTicker := time.NewTicker(c.Hub.ClientOptions.PingInterval)
+	pongTimer := time.NewTimer(c.Hub.ClientOptions.PongWait)
 
 	pongTimer.Stop()
 
-	var unsub = func() {
+	var stopSigs = func() {
 		pingTicker.Stop()
 		pongTimer.Stop()
-		c.Hub.UnsubscribeCh <- c.ID
 	}
 
 	defer func() {
-		unsub()
+		stopSigs()
 		c.closeConn()
+		c.Hub.CloseClientCh <- c
 	}()
 
 	c.Conn.SetPongHandler(func(appData string) error {
@@ -70,7 +71,7 @@ func (c *Client[I]) writeMessages() {
 	})
 
 	c.Conn.SetCloseHandler(func(code int, text string) error {
-		unsub()
+		stopSigs()
 		return nil
 	})
 
@@ -92,7 +93,7 @@ func (c *Client[I]) writeMessages() {
 				return
 			}
 
-			pongTimer.Reset(c.Hub.Options.PongWait)
+			pongTimer.Reset(c.Hub.ClientOptions.PongWait)
 
 		case <-pongTimer.C:
 			c.writeCloseMessage(ws.CloseProtocolError, "No pong received.")

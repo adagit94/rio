@@ -1,40 +1,35 @@
 package server
 
 import (
-	ws "github.com/fasthttp/websocket"
 	"time"
+	ws "github.com/fasthttp/websocket"
 )
 
 type RouteMessage[I ID] func(clients Clients[I], msg *MessageIntern[I])
 type Clients[I ID] map[I]*Client[I]
 
-type HubOptions[I ID] struct {
-	MaxReadBytes int64
-	PingInterval time.Duration
-	PongWait     time.Duration
+type CommonClientOptions[I ID] struct {
+	MessagesToWriteBuffSize int
+	MaxReadBytes            int64
+	PingInterval            time.Duration
+	PongWait                time.Duration
 }
 
 type Hub[I ID] struct {
-	Clients          Clients[I]
-	SubscribeCh      chan *Client[I]
-	UnsubscribeCh    chan I
-	UnsubscribeAllCh chan bool
-	StopCh           chan bool
-	MessageToRoute   chan *MessageIntern[I]
-	RouteMessage     RouteMessage[I]
-	Options          *HubOptions[I]
+	Clients           Clients[I]
+	SubscribeClientCh chan *Client[I]
+	CloseClientCh     chan *Client[I]
+	MessageToRoute    chan *MessageIntern[I]
+	RouteMessage      RouteMessage[I]
+	ClientOptions     *CommonClientOptions[I]
 }
 
-func (h *Hub[I]) Subscribe(id I, conn *ws.Conn, messagesToWriteSize int) {
-	h.SubscribeCh <- &Client[I]{ID: id, Hub: h, Conn: conn, MessagesToWrite: make(chan *MessageIntern[I], messagesToWriteSize)}
-}
+func (h *Hub[I]) SubscribeClient(id I, conn *ws.Conn) <- chan bool {
+	subscribed := make(chan bool, 1)
 
-func (h *Hub[I]) Unsubscribe(id I) {
-	h.UnsubscribeCh <- id
-}
+	h.SubscribeClientCh <- &Client[I]{ID: id, Hub: h, Conn: conn, MessagesToWrite: make(chan *MessageIntern[I], h.ClientOptions.MessagesToWriteBuffSize), Subscribed: subscribed}
 
-func (h *Hub[I]) UnsubscribeAll() {
-	h.UnsubscribeAllCh <- true
+	return subscribed
 }
 
 func (h *Hub[I]) Run() {
@@ -44,25 +39,17 @@ func (h *Hub[I]) Run() {
 func (h *Hub[I]) processSignals() {
 	for {
 		select {
-		case stop := <-h.StopCh:
-			if stop {
-				return
+		case c := <-h.CloseClientCh:
+			if _, exists := h.Clients[c.ID]; exists {
+				h.closeClient(c)
 			}
 
-		case v := <-h.UnsubscribeAllCh:
-			if v {
-				h.closeClients()
-			}
-
-		case id := <-h.UnsubscribeCh:
-			if client, exists := h.Clients[id]; exists {
-				h.closeClient(client)
-			}
-
-		case client := <-h.SubscribeCh:
-			if _, exists := h.Clients[client.ID]; !exists {
-				h.Clients[client.ID] = client
-				client.Run()
+		case c := <-h.SubscribeClientCh:
+			if _, exists := h.Clients[c.ID]; !exists {
+				h.subscribeClient(c)
+				c.Subscribed <- true
+			} else {
+				c.Subscribed <- false
 			}
 
 		case msg := <-h.MessageToRoute:
@@ -71,35 +58,31 @@ func (h *Hub[I]) processSignals() {
 	}
 }
 
+func (h *Hub[I]) subscribeClient(c *Client[I]) {
+	h.Clients[c.ID] = c
+	c.Run()
+}
+
 func (h *Hub[I]) closeClient(c *Client[I]) {
 	close(c.MessagesToWrite)
 	delete(h.Clients, c.ID)
 }
 
-func (h *Hub[I]) closeClients() {
-	for _, c := range h.Clients {
-		h.closeClient(c)
-	}
-}
-
 type IHub[I ID] interface {
-	Subscribe(id I, conn *ws.Conn, messagesToWriteSize int)
-	Unsubscribe(id I)
-	UnsubscribeAll()
-	Run()
+	SubscribeClient(id I, conn *ws.Conn) <- chan bool
 }
 
-func CreateHub[I ID](options HubOptions[I], routeMessage RouteMessage[I]) IHub[I] {
-	hub := &Hub[I]{
-		Options:          &options,
-		Clients:          make(map[I]*Client[I]),
-		SubscribeCh:      make(chan *Client[I]),
-		UnsubscribeCh:    make(chan I),
-		UnsubscribeAllCh: make(chan bool),
-		StopCh:           make(chan bool),
-		MessageToRoute:   make(chan *MessageIntern[I]),
-		RouteMessage:     routeMessage,
+func CreateHub[I ID](clientOptions CommonClientOptions[I], routeMessage RouteMessage[I]) IHub[I] {
+	h := &Hub[I]{
+		ClientOptions:     &clientOptions,
+		Clients:           make(map[I]*Client[I]),
+		SubscribeClientCh: make(chan *Client[I]),
+		CloseClientCh:     make(chan *Client[I]),
+		MessageToRoute:    make(chan *MessageIntern[I]),
+		RouteMessage:      routeMessage,
 	}
 
-	return hub
+	h.Run()
+
+	return h
 }
