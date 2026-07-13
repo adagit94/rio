@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"sync"
 	"time"
+
 	ws "github.com/fasthttp/websocket"
 )
 
@@ -17,21 +19,28 @@ type MessageIntern[I ID] struct {
 }
 
 type Client[I ID] struct {
-	ID              I
-	Hub             *Hub[I]
-	Conn            *ws.Conn
-	Subscribed      chan <- bool
-	MessagesToWrite chan *MessageIntern[I]
+	ID         I
+	Conn       *ws.Conn
+	WriteBuff  chan *MessageIntern[I]
+	Terminated chan bool
+	Hub        *Hub[I]
 }
 
 func (c *Client[I]) Run() {
-	go c.readMessages()
-	go c.writeMessages()
+	var wg sync.WaitGroup
+
+	wg.Go(c.ReadMessages)
+	wg.Go(c.WriteMessages)
+
+	go func() {
+		wg.Wait()
+		c.Terminated <- true
+	}()
 }
 
-func (c *Client[I]) readMessages() {
+func (c *Client[I]) ReadMessages() {
 	defer func() {
-		c.Hub.CloseClientCh <- c
+		c.Hub.CloseClient(c)
 	}()
 
 	c.Conn.SetReadLimit(c.Hub.ClientOptions.MaxReadBytes)
@@ -40,15 +49,15 @@ func (c *Client[I]) readMessages() {
 		msgType, msg, err := c.Conn.ReadMessage()
 
 		if err != nil {
-			fmt.Printf("[ERR][Client: %v] Attempt to read a message failed: %s.\n", c.ID, err)
+			fmt.Printf("[ERR][Client: %v] Message read error: %s.\n", c.ID, err)
 			return
 		}
 
-		c.Hub.MessageToRoute <- &MessageIntern[I]{Source: c, Type: msgType, Data: msg}
+		c.Hub.RouteMessage(&MessageIntern[I]{Source: c, Type: msgType, Data: msg})
 	}
 }
 
-func (c *Client[I]) writeMessages() {
+func (c *Client[I]) WriteMessages() {
 	pingTicker := time.NewTicker(c.Hub.ClientOptions.PingInterval)
 	pongTimer := time.NewTimer(c.Hub.ClientOptions.PongWait)
 
@@ -61,8 +70,8 @@ func (c *Client[I]) writeMessages() {
 
 	defer func() {
 		stopSigs()
-		c.closeConn()
-		c.Hub.CloseClientCh <- c
+		c.Hub.CloseClient(c)
+		c.CloseConn()
 	}()
 
 	c.Conn.SetPongHandler(func(appData string) error {
@@ -77,32 +86,32 @@ func (c *Client[I]) writeMessages() {
 
 	for {
 		select {
-		case msg, ok := <-c.MessagesToWrite:
+		case msg, ok := <-c.WriteBuff:
 			if !ok {
 				// MessagesToSend channel closed and drained.
-				c.writeCloseMessage(ws.CloseNormalClosure, "")
+				c.WriteCloseMessage(ws.CloseNormalClosure, "")
 				return
 			}
 
-			if !c.writeDataMessage(msg.Type, msg.Data) {
+			if !c.WriteDataMessage(msg.Type, msg.Data) {
 				return
 			}
 
 		case <-pingTicker.C:
-			if !c.writePingMessage() {
+			if !c.WritePingMessage() {
 				return
 			}
 
 			pongTimer.Reset(c.Hub.ClientOptions.PongWait)
 
 		case <-pongTimer.C:
-			c.writeCloseMessage(ws.CloseProtocolError, "No pong received.")
+			c.WriteCloseMessage(ws.CloseProtocolError, "No pong received.")
 			return
 		}
 	}
 }
 
-func (c *Client[I]) writeDataMessage(msgType int, data []byte) bool {
+func (c *Client[I]) WriteDataMessage(msgType int, data []byte) bool {
 	if err := c.Conn.WriteMessage(msgType, data); err != nil {
 		fmt.Printf("[ERR][Client: %v] Failed to write a data message of %d type: %s.\n", c.ID, msgType, err)
 		return false
@@ -111,7 +120,7 @@ func (c *Client[I]) writeDataMessage(msgType int, data []byte) bool {
 	return true
 }
 
-func (c *Client[I]) writePingMessage() bool {
+func (c *Client[I]) WritePingMessage() bool {
 	if err := c.Conn.WriteMessage(ws.PingMessage, nil); err != nil {
 		fmt.Printf("[ERR][Client: %v] Failed to write a ping message: %s.\n", c.ID, err)
 		return false
@@ -120,7 +129,7 @@ func (c *Client[I]) writePingMessage() bool {
 	return true
 }
 
-func (c *Client[I]) writeCloseMessage(code int, text string) bool {
+func (c *Client[I]) WriteCloseMessage(code int, text string) bool {
 	if err := c.Conn.WriteMessage(ws.CloseMessage, ws.FormatCloseMessage(code, text)); err != nil {
 		fmt.Printf("[ERR][Client: %v] Failed to write a close message: %s.\n", c.ID, err)
 		return false
@@ -129,7 +138,7 @@ func (c *Client[I]) writeCloseMessage(code int, text string) bool {
 	return true
 }
 
-func (c *Client[I]) closeConn() bool {
+func (c *Client[I]) CloseConn() bool {
 	if err := c.Conn.Close(); err != nil {
 		fmt.Printf("[ERR][Client: %v] Attempt to close the connection failed: %s.\n", c.ID, err)
 		return false

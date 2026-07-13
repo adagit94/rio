@@ -6,11 +6,11 @@ func Broadcaster[I ID](clients Clients[I], msg *MessageIntern[I]) {
 			continue
 		}
 
-		client.MessagesToWrite <- msg
+		client.WriteBuff <- msg
 	}
 }
 
-func Mapper[I ID, M map[I][]I](connections M) RouteMessage[I] {
+func Mapper[I ID, M map[I][]I](connections M) Router[I] {
 	return func(clients Clients[I], msg *MessageIntern[I]) {
 		receivers, found := connections[msg.Source.ID]
 
@@ -25,7 +25,7 @@ func Mapper[I ID, M map[I][]I](connections M) RouteMessage[I] {
 				continue
 			}
 
-			r.MessagesToWrite <- msg
+			r.WriteBuff <- msg
 		}
 	}
 }

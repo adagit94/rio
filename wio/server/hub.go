@@ -1,88 +1,69 @@
 package server
 
 import (
+	"sync"
 	"time"
+
 	ws "github.com/fasthttp/websocket"
 )
 
-type RouteMessage[I ID] func(clients Clients[I], msg *MessageIntern[I])
+type Router[I ID] func(clients Clients[I], msg *MessageIntern[I])
 type Clients[I ID] map[I]*Client[I]
 
 type CommonClientOptions[I ID] struct {
-	MessagesToWriteBuffSize int
-	MaxReadBytes            int64
-	PingInterval            time.Duration
-	PongWait                time.Duration
+	WriteBuffSize int
+	MaxReadBytes  int64
+	PingInterval  time.Duration
+	PongWait      time.Duration
 }
 
 type Hub[I ID] struct {
-	Clients           Clients[I]
-	SubscribeClientCh chan *Client[I]
-	CloseClientCh     chan *Client[I]
-	MessageToRoute    chan *MessageIntern[I]
-	RouteMessage      RouteMessage[I]
-	ClientOptions     *CommonClientOptions[I]
+	Mu            sync.Mutex
+	Clients       Clients[I]
+	ClientOptions *CommonClientOptions[I]
+	Router        Router[I]
 }
 
-func (h *Hub[I]) SubscribeClient(id I, conn *ws.Conn) <- chan bool {
-	subscribed := make(chan bool, 1)
+func (h *Hub[I]) Subscribe(id I, conn *ws.Conn) *Client[I] {
+	h.Mu.Lock()
+	defer h.Mu.Unlock()
 
-	h.SubscribeClientCh <- &Client[I]{ID: id, Hub: h, Conn: conn, MessagesToWrite: make(chan *MessageIntern[I], h.ClientOptions.MessagesToWriteBuffSize), Subscribed: subscribed}
+	if _, exists := h.Clients[id]; !exists {
+		c := &Client[I]{ID: id, Hub: h, Conn: conn, WriteBuff: make(chan *MessageIntern[I], h.ClientOptions.WriteBuffSize), Terminated: make(chan bool, 1)}
 
-	return subscribed
+		h.Clients[id] = c
+		c.Run()
+
+		return c
+	}
+
+	return nil
+
 }
 
-func (h *Hub[I]) Run() {
-	go h.processSignals()
-}
+func (h *Hub[I]) CloseClient(c *Client[I]) {
+	h.Mu.Lock()
+	defer h.Mu.Unlock()
 
-func (h *Hub[I]) processSignals() {
-	for {
-		select {
-		case c := <-h.CloseClientCh:
-			if _, exists := h.Clients[c.ID]; exists {
-				h.closeClient(c)
-			}
-
-		case c := <-h.SubscribeClientCh:
-			if _, exists := h.Clients[c.ID]; !exists {
-				h.subscribeClient(c)
-				c.Subscribed <- true
-			} else {
-				c.Subscribed <- false
-			}
-
-		case msg := <-h.MessageToRoute:
-			h.RouteMessage(h.Clients, msg)
-		}
+	if _, exists := h.Clients[c.ID]; exists {
+		close(c.WriteBuff)
+		delete(h.Clients, c.ID)
 	}
 }
 
-func (h *Hub[I]) subscribeClient(c *Client[I]) {
-	h.Clients[c.ID] = c
-	c.Run()
+func (h *Hub[I]) RouteMessage(msg *MessageIntern[I]) {
+	h.Mu.Lock()
+	defer h.Mu.Unlock()
+
+	h.Router(h.Clients, msg)
 }
 
-func (h *Hub[I]) closeClient(c *Client[I]) {
-	close(c.MessagesToWrite)
-	delete(h.Clients, c.ID)
-}
-
-type IHub[I ID] interface {
-	SubscribeClient(id I, conn *ws.Conn) <- chan bool
-}
-
-func CreateHub[I ID](clientOptions CommonClientOptions[I], routeMessage RouteMessage[I]) IHub[I] {
+func CreateHub[I ID](clientOptions CommonClientOptions[I], routeMessage Router[I]) *Hub[I] {
 	h := &Hub[I]{
-		ClientOptions:     &clientOptions,
-		Clients:           make(map[I]*Client[I]),
-		SubscribeClientCh: make(chan *Client[I]),
-		CloseClientCh:     make(chan *Client[I]),
-		MessageToRoute:    make(chan *MessageIntern[I]),
-		RouteMessage:      routeMessage,
+		ClientOptions: &clientOptions,
+		Clients:       make(map[I]*Client[I]),
+		Router:        routeMessage,
 	}
-
-	h.Run()
 
 	return h
 }
