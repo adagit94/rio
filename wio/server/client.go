@@ -69,7 +69,6 @@ func (c *Client[I]) WriteMessages() {
 	}
 
 	defer func() {
-		stopSigs()
 		c.Hub.CloseClient(c)
 		c.CloseConn()
 	}()

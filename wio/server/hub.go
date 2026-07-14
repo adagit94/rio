@@ -38,7 +38,6 @@ func (h *Hub[I]) Subscribe(id I, conn *ws.Conn) *Client[I] {
 	}
 
 	return nil
-
 }
 
 func (h *Hub[I]) CloseClient(c *Client[I]) {
@@ -46,6 +45,7 @@ func (h *Hub[I]) CloseClient(c *Client[I]) {
 	defer h.Mu.Unlock()
 
 	if _, exists := h.Clients[c.ID]; exists {
+		c.Conn.CloseHandler()(ws.CloseNoStatusReceived, "")
 		close(c.WriteBuff)
 		delete(h.Clients, c.ID)
 	}
