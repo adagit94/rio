@@ -16,8 +16,8 @@ type ID interface {
 // MetaMessage contains additional information useful for routing purposes. Sender musn't be changed in user code and it's channels not closed.
 type MetaMessage[I ID] struct {
 	Sender *Client[I]
-	Type   int
-	Data   []byte
+	Type   int // Should be 1 (Text) or 2 (Binary) when passed to the router. Control messages (Ping, Pong, Close) are handled in the background.
+	Data   []byte // Original message data.
 }
 
 // Provided Router should send MetaMessage to WriteBuff in case Client is relevant. True value will be send into Terminated channel after both read and write loop (running in separate goroutines) terminate. Client musn't be changed in user code and it's channels not closed after it's creation when it get's used.

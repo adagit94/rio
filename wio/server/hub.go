@@ -10,14 +10,15 @@ import (
 
 type Clients[I ID] map[I]*Client[I]
 
+// Options shared across subscribed clients.
 type CommonClientOptions[I ID] struct {
-	WriteBuffSize int
+	WriteBuffSize int // Size of channel queue with messages to be written to respective client.
 	MaxReadBytes  int64
 	PingInterval  time.Duration
 	PongWait      time.Duration
 }
 
-// Regular user code should use CreateHub constructor instead that returns public interface. Hub type itself is exposed only for more advanced use cases that require custom code. It musn't be changed without mutex (Mu) when it get's used after it's creation and read/write loops run for example.
+// Regular user code should use CreateBroadHub, CreateMappedHub or CreateHub constructors instead that return public interface. Hub type itself is exposed only for more advanced use cases that require custom code. It musn't be changed without mutex (Mu) when it get's used after it's creation and read/write loops run for example.
 type Hub[I ID] struct {
 	Mu            sync.Mutex
 	Clients       Clients[I]
