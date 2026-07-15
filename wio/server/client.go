@@ -13,7 +13,7 @@ type ID interface {
 	~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~string
 }
 
-// MetaMessage contains additional information useful for routing purposes. Sender musn't be changed in user code and it's channels not closed.
+// MetaMessage contains additional information useful for routing purposes.
 type MetaMessage[I ID] struct {
 	Sender *Client[I]
 	Type   int // Should be 1 (Text) or 2 (Binary) when passed to the router. Control messages (Ping, Pong, Close) are handled in the background.

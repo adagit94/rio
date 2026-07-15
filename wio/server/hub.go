@@ -18,9 +18,9 @@ type CommonClientOptions[I ID] struct {
 	PongWait      time.Duration
 }
 
-// Regular user code should use CreateBroadHub, CreateMappedHub or CreateHub constructors instead that return public interface. Hub type itself is exposed only for more advanced use cases that require custom code. It musn't be changed without mutex (Mu) when it get's used after it's creation and read/write loops run for example.
+// Regular user code should use CreateBroadHub, CreateMappedHub or CreateHub (with read-only router) constructors instead that return public and safe interface. Hub type itself is exposed only for more advanced use cases that require custom code. It musn't be changed without mutex (Mu) when it get's used after it's creation and read/write loops run for example.
 type Hub[I ID] struct {
-	Mu            sync.Mutex
+	Mu            sync.RWMutex
 	Clients       Clients[I]
 	ClientOptions *CommonClientOptions[I]
 	Router        Router[I]
@@ -69,8 +69,8 @@ func (h *Hub[I]) CloseClient(c *Client[I]) {
 
 // Route message to appropriate clients as configured by provided Router.
 func (h *Hub[I]) RouteMessage(msg *MetaMessage[I]) {
-	h.Mu.Lock()
-	defer h.Mu.Unlock()
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
 
 	h.Router(h.Clients, msg)
 }
